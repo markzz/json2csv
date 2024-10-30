@@ -170,8 +170,6 @@ fn main() -> io::Result<()> {
         cols = merge_vecs(cols, x);
     }
 
-    eprintln!("Columns: {:?}", cols.len());
-
     println!("{}", write_header(&cols));
     let reader = fopen(fpath)?;
 
