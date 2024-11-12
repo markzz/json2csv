@@ -5,6 +5,7 @@ use zstd::stream::read::Decoder as ZstdDecoder;
 use json::JsonValue;
 use std::env;
 use escape_string::escape;
+use getopts::Options;
 
 fn get_names(pfx: String, obj: &JsonValue) -> Vec<String> {
     let mut ret = Vec::new();
@@ -111,11 +112,15 @@ fn construct_obj(cols: &Vec<String>, key: &str, obj: &JsonValue, vals: &mut Vec<
     }
 }
 
-fn construct_row(cols: &Vec<String>, obj: &JsonValue) -> String {
+fn construct_row(cols: &Vec<String>, obj: &JsonValue, skip: &Vec<String>) -> String {
     let mut row = String::new();
     let mut vals = vec![String::new(); cols.len()];
 
     for (key, val) in obj.entries() {
+        if skip.contains(&key.to_string()) {
+            continue
+        }
+
         if val.is_array() {
             construct_arr(cols, key, val, &mut vals);
             continue
@@ -131,22 +136,66 @@ fn construct_row(cols: &Vec<String>, obj: &JsonValue) -> String {
     }
 
     for x in vals {
-        row.push_str(&format!("\"{}\",", escape(&x)))
+        row.push_str(&format!("\"{}\",", escape(&x)));
     }
 
     row.pop();
     row
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file>", args[0]);
-        std::process::exit(1);
-    }
+fn usage(program: &str, opts: Options) {
+    let brief = format!("Usage: {} [options] <file>", program);
+    print!("{}", opts.usage(&brief));
+}
 
-    let fpath = &args[1];
-    let reader = fopen(fpath)?;
+struct Opts {
+    skip_field: Vec<String>,
+    file: String,
+}
+
+fn options() -> Option<Opts> {
+    let args: Vec<String> = env::args().collect();
+    let program = args[0].clone();
+
+    let mut skip_field: Vec<String> = Vec::new();
+
+    let mut opts = Options::new();
+    opts.optopt("s", "skip-field", "skip field", "FIELD");
+    opts.optflag("h", "help", "print this help menu");
+    let matches = match opts.parse(&args[1..]) {
+        Ok(m) => m,
+        Err(f) => {
+            eprintln!("Error: {}", f.to_string());
+            std::process::exit(1);
+        }
+    };
+    if matches.opt_present("h") {
+        usage(&program, opts);
+        return None;
+    }
+    if matches.opt_present("s") {
+        skip_field = matches.opt_strs("s");
+    }
+    let file = if !matches.free.is_empty() {
+        matches.free[0].clone()
+    } else {
+        eprintln!("No file specified");
+        std::process::exit(1);
+    };
+
+    Some(Opts {
+        skip_field,
+        file,
+    })
+}
+
+fn main() -> io::Result<()> {
+    let opts = match options() {
+        Some(opts) => opts,
+        None => return Ok(()),
+    };
+
+    let reader = fopen(&opts.file)?;
 
     // initial sweep
     let mut cols = Vec::new();
@@ -170,12 +219,16 @@ fn main() -> io::Result<()> {
         cols = merge_vecs(cols, x);
     }
 
+    if !opts.skip_field.is_empty() {
+        cols = cols.into_iter().filter(|x| !opts.skip_field.contains(x)).collect();
+    }
+
     println!("{}", write_header(&cols));
-    let reader = fopen(fpath)?;
+    let reader = fopen(&opts.file)?;
 
     for line in reader.lines() {
         let json: JsonValue = json::parse(&line?).unwrap();
-        println!("{}", construct_row(&cols, &json));
+        println!("{}", construct_row(&cols, &json, &opts.skip_field));
     }
 
     Ok(())
